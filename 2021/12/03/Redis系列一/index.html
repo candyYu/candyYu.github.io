@@ -1,0 +1,116 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="X-UA-Compatible" content="IE=edge"><meta name="author" content="candy"><title>Redis系列一 · Candy</title><meta name="description" content="Redis 系列文章（一）Redis数据结构底层实现Redis作为一个c语言实现的高效率内存数据库，底层使用了很多高效的数据结构，平常我们会使用到它那些结构应用到业务场景呢，下面给些回答：
+最普通kv  set key value 字符串对象，底层编码实现 sds  int embwar  raw,"><meta name="keywords" content="Candy博客,Candy'sBlog,博客"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="renderer" content="webkit"><link rel="stylesheet" href="/css/style.css"><link rel="stylesheet" href="/css/blog_basic.css"><link rel="stylesheet" href="/css/font-awesome.min.css"><link rel="alternate" type="application/atom+xml" title="ATOM 1.0" href="/atom.xml"><script src="/js/jquery.js"></script><meta name="generator" content="Hexo 5.4.0"></head><body><div class="sidebar animated fadeInDown"><div class="logo-title"><div class="title"><img src="/images/logo@2x.png" style="width:127px;"><h3 title=""><a href="/">Candy</a></h3><div class="description"><p>心之所愿，无事不成。<br> Nothing is impossible to a willing heart.</p></div></div></div><ul class="social-links"><li><a target="_blank" rel="noopener" href="https://github.com/candyYu"><i class="fa fa-github"></i></a></li><li><a href="candyDocker@gmail.com"><i class="fa fa-envelope"></i></a></li></ul><div class="footer"><div class="p"> <span>© 2017 - 2021 </span><i class="fa fa-star"></i><span> candy</span></div><div class="by_farbox"><span>Powered by </span><a href="https://hexo.io/zh-cn/" target="_blank">Hexo </a><span> & </span><a href="https://github.com/mrcore/hexo-theme-Anatole-Core" target="_blank">Anatole-Core  </a></div></div></div><div class="main"><div class="page-top animated fadeInDown"><div class="nav"><li><a href="/">首页</a></li><li><a href="/archives">归档</a></li><li><a href="/tags">标签</a></li><li><a href="/about">关于</a></li></div><div class="information"><div class="back_btn"><li><a class="fa fa-chevron-left" onclick="window.history.go(-1)"> </a></li></div></div></div><div class="autopagerize_page_element"><div class="content"><div class="post-page"><div class="post animated fadeInDown"><div class="post-title"><h3><a>Redis系列一</a></h3></div><div class="post-content"><h1 id="Redis-系列文章（一）"><a href="#Redis-系列文章（一）" class="headerlink" title="Redis 系列文章（一）"></a>Redis 系列文章（一）</h1><h2 id="Redis数据结构底层实现"><a href="#Redis数据结构底层实现" class="headerlink" title="Redis数据结构底层实现"></a>Redis数据结构底层实现</h2><p>Redis作为一个c语言实现的高效率内存数据库，底层使用了很多高效的数据结构，平常我们会使用到它那些结构应用到业务场景呢，下面给些回答：</p>
+<p>最普通kv  set key value 字符串对象，底层编码实现 sds  int embwar  raw,Redis设计和实现上比较好的一点是 数据类型的支持和底层编码分开，redis支持的数据类型有 string hash set zset list等，某个数据类型都有多种编码方式，比如 string 就有 int embstr raw 三种方式 hash有ziplist和hashtable等方式，这样的设计使得数据类型和底层编码分开，后续拓展编码方式很容易，具体如下</p>
+<ul>
+<li><p>List 数据类型底层数据结构由「双向链表」或「压缩表列表」实现；</p>
+</li>
+<li><p>Hash 数据类型底层数据结构由「压缩列表」或「哈希表」实现；</p>
+</li>
+<li><p>Set 数据类型底层数据结构由「哈希表」或「整数集合」实现；</p>
+</li>
+<li><p> Zset 数据类型底层数据结构由「压缩列表」或「跳表」实现；</p>
+</li>
+</ul>
+<p>string 在redis中的机构 string存储最大512M 是二进制安全的 也就是说可以存储图片等二进制数据</p>
+<h3 id="String-底层数据结构"><a href="#String-底层数据结构" class="headerlink" title="String 底层数据结构"></a>String 底层数据结构</h3><p>Redis 5.0 的 SDS(simple dynamic string) 的数据结构</p>
+<p><img src="/2021/12/03/Redis%E7%B3%BB%E5%88%97%E4%B8%80/SDS.png" alt="截屏2021-12-03 下午2.38.54"></p>
+<p>具体详细介绍如下：</p>
+<ul>
+<li><p><strong>len，SDS 所保存的字符串长度</strong>。这样获取字符串长度的时候，只需要返回这个变量值就行，时间复杂度只需要 O（1）。c语言原生char类型为O(n)</p>
+</li>
+<li><p><strong>lloc，分配给字符数组的空间长度</strong>。这样在修改字符串的时候，可以通过 <code>alloc - len</code> 计算 出剩余的空间大小，然后用来判断空间是否满足修改需求，如果不满足的话，就会自动将 SDS  的空间扩展至执行修改所需的大小，然后才执行实际的修改操作，所以使用 SDS 既不需要手动修改 SDS 的空间大小，也不会出现前面所说的缓冲区益处的问题。</p>
+</li>
+<li><p><strong>flags，SDS 类型，用来表示不同类型的 SDS</strong>。一共设计了 5 种类型，分别是 sdshdr5（貌似已废弃，待确认）、sdshdr8、sdshdr16、sdshdr32 和 sdshdr64，后面在说明区别之处。</p>
+</li>
+<li><p><strong>buf[]，字节数组，用来保存实际数据</strong>。不需要用 “\0” 字符来标识字符串结尾了，而是直接将其作为二进制数据处理，可以用来保存图片等二进制数据。它即可以保存文本数据，也可以保存二进制数据，所以叫字节数组会更好点。</p>
+<p>总的来说，Redis 的 SDS 结构在原本字符数组之上，增加了三个元数据：len、alloc、flags，用来解决 C 语言字符串的缺陷。</p>
+<h5 id="节省内存空间"><a href="#节省内存空间" class="headerlink" title="节省内存空间"></a>节省内存空间</h5><p>SDS 结构中有个 flags 成员变量，表示的是 SDS 类型。</p>
+<p>Redos 一共设计了 5 种类型，分别是 sdshdr5、sdshdr8、sdshdr16、sdshdr32 和 sdshdr64。</p>
+<p>这 5 种类型的主要<strong>区别就在于，它们数据结构中的 len 和 alloc 成员变量的数据类型不同</strong>，</p>
+<p>比如sdshdr16 和 sdshdr32</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> __<span class="title">attribute__</span> ((__<span class="title">packed__</span>)) <span class="title">sdshdr16</span> &#123;</span></span><br><span class="line">    <span class="keyword">uint16_t</span> len;</span><br><span class="line">    <span class="keyword">uint16_t</span> alloc; </span><br><span class="line">    <span class="keyword">unsigned</span> <span class="keyword">char</span> flags; </span><br><span class="line">    <span class="keyword">char</span> buf[];</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> __<span class="title">attribute__</span> ((__<span class="title">packed__</span>)) <span class="title">sdshdr32</span> &#123;</span></span><br><span class="line">    <span class="keyword">uint32_t</span> len;</span><br><span class="line">    <span class="keyword">uint32_t</span> alloc; </span><br><span class="line">    <span class="keyword">unsigned</span> <span class="keyword">char</span> flags;</span><br><span class="line">    <span class="keyword">char</span> buf[];</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li>sdshdr16 类型的 len 和 alloc 的数据类型都是 uint16_t，表示字符数组长度和分配空间大小不能超过 2 的 16 次方。</li>
+<li>sdshdr32 则都是 uint32_t，表示表示字符数组长度和分配空间大小不能超过 2 的 32 次方。</li>
+<li><strong>之所以 SDS 设计不同类型的结构体，是为了能灵活保存不同大小的字符串，从而有效节省内存空间</strong>。比如，在保存小字符串时，结构头占用空间也比较少。</li>
+<li>除了设计不同类型的结构体，Redis 在编程上还<strong>使用了专门的编译优化来节省内存空间</strong>，即在 struct 声明了 <code>__attribute__ ((packed))</code> ，它的作用是：<strong>告诉编译器取消结构在编译过程中的优化对齐，按照实际占用字节数进行对齐</strong>。</li>
+</ul>
+</li>
+</ul>
+<h3 id="压缩列表"><a href="#压缩列表" class="headerlink" title="压缩列表"></a>压缩列表</h3><p>压缩列表是 Redis 为了节约内存而开发的，它是<strong>由连续内存块组成的顺序型数据结构</strong>，有点类似于数组。</p>
+<p><img src="/2021/12/03/Redis%E7%B3%BB%E5%88%97%E4%B8%80/Ziplist.png" alt="截屏2021-12-03 下午5.34.04"></p>
+<p>压缩列表在表头有三个字段：</p>
+<ul>
+<li><p><strong>zlbytes</strong>，记录整个压缩列表占用对内存字节数；</p>
+</li>
+<li><p><strong>zltail</strong>，记录压缩列表「尾部」节点距离起始地址由多少字节，也就是列表尾的偏移量；</p>
+</li>
+<li><p><strong>zllen</strong>，记录压缩列表包含的节点数量；</p>
+</li>
+<li><p><strong>zlend</strong>，标记压缩列表的结束点，特殊值 OxFF（十进制255）。</p>
+<p>在压缩列表中，如果我们要查找定位第一个元素和最后一个元素，可以通过表头三个字段的长度直接定位，复杂度是 O(1)。而查找其他元素时，就没有这么高效了，只能逐个查找，此时的复杂度就是 O(N) 了。</p>
+</li>
+</ul>
+<p>压缩列表节点包含三部分内容：</p>
+<ul>
+<li>***prevlen***，记录了前一个节点的长度；</li>
+<li>***encoding***，记录了当前节点实际数据的类型以及长度；</li>
+<li>***data***，记录了当前节点的实际数据；</li>
+</ul>
+<h4 id="连锁更新"><a href="#连锁更新" class="headerlink" title="连锁更新"></a>连锁更新</h4><p>压缩列表除了查找复杂度高的问题，压缩列表在插入元素时，如果内存空间不够了，压缩列表还需要重新分配一块连续的内存空间，而这可能会引发<strong>连锁更新</strong>的问题。</p>
+<p>压缩列表里的每个节点中的  prevlen 属性都记录了「前一个节点的长度」，而且 prevlen 属性的空间大小跟前一个节点长度值有关，比如：</p>
+<ul>
+<li>如果前一个<strong>节点的长度小于 254 字节</strong>，那么 prevlen 属性需要用 <strong>1 字节的空间</strong>来保存这个长度值；</li>
+<li>如果前一个<strong>节点的长度大于等于 254 字节</strong>，那么 prevlen 属性需要用 <strong>5 字节的空间</strong>来保存这个长度值；</li>
+</ul>
+<p>所以一般ziplist保存元素不会很多</p>
+<h2 id="Redis-实际项目中应用场景"><a href="#Redis-实际项目中应用场景" class="headerlink" title="Redis 实际项目中应用场景"></a>Redis 实际项目中应用场景</h2><h2 id="（1）排行榜"><a href="#（1）排行榜" class="headerlink" title="（1）排行榜"></a>（1）排行榜</h2><p> ziplist zrank zreverange</p>
+<h2 id="（2）月打卡签到"><a href="#（2）月打卡签到" class="headerlink" title="（2）月打卡签到"></a>（2）月打卡签到</h2><p>bitmap 实现底层</p>
+<h3 id="（3）地理位置-geo"><a href="#（3）地理位置-geo" class="headerlink" title="（3）地理位置 geo"></a>（3）地理位置 geo</h3><p>​     </p>
+<pre><code>  ### （4） 月pv uv统计
+</code></pre>
+<p>​        hyperlog 月pv uv统计</p>
+<h2 id="Linux环境上的redis优化"><a href="#Linux环境上的redis优化" class="headerlink" title="Linux环境上的redis优化"></a>Linux环境上的redis优化</h2><p>1 最大打开文件句柄数</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">ulimit</span> -Sn &#123;max-open-files&#125;</span><br></pre></td></tr></table></figure>
+
+<p>2 Tcp backlog</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">cat /proc/net/sys/core/somaxconn</span><br><span class="line">128</span><br><span class="line">echo 511 &gt; /proc/net/sys/core/somaxconn</span><br></pre></td></tr></table></figure>
+
+<ol start="3">
+<li><p>vm.overcommit_memory建议为1</p>
+</li>
+<li><p>Linux &gt; 3.5 vm.swappiness建议为1  否则建议为0</p>
+</li>
+<li><p>Transparent Huge Pages (THP)建议关闭 但注意linux发行版本改变了THP位置</p>
+</li>
+<li><p>可以为Redis设置 oom_adj 减少redis被OOM killer概率 但不能过渡依赖</p>
+</li>
+<li><p>建议对Redis所在节点 使用NTP服务，同步时钟</p>
+</li>
+<li><p>设置合理ulimit保证网络连接正常</p>
+</li>
+<li><p>设置合理的tcp-backlog参数</p>
+</li>
+</ol>
+<h2 id="Redis-安全"><a href="#Redis-安全" class="headerlink" title="Redis 安全"></a>Redis 安全</h2><p>1 设置密码  requirepass 设置密码长度为64个字节以上</p>
+<p>2.伪装危险命令</p>
+<p>引入renamecommand 比如</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">rename-command flushall 12312312fascsfsfsfsfs</span><br></pre></td></tr></table></figure>
+
+<p>3.防火墙</p>
+<p>4.bind</p>
+<p>bind指定了 redis 绑定那块网卡可以进行访问</p>
+<p>5bigkeys 阻塞问题</p>
+<p>redis-cli –bigkeys 可以查找占比比较大的key</p>
+<p>另外可以通过 debug object key 查看一个key是否是bigkey 可以查看这个命令返回的 serializedlength属性 返回序列号字节数</p>
+<h2 id="其他待深入学习"><a href="#其他待深入学习" class="headerlink" title="其他待深入学习"></a>其他待深入学习</h2><p> Redis运维平台（CacheCloud)</p>
+<p> github redis-migarate-tool 唯品会开源迁移工具</p>
+<p> Redis bitmap 实现布隆过滤器 <a target="_blank" rel="noopener" href="https://github.com/erikdubbelboer/redis-lua-scaling-bloom-filter">https://github.com/erikdubbelboer/redis-lua-scaling-bloom-filter</a></p>
+<p>redis-faina</p>
+<p> paketbeat ELK 抓取日志收集器</p>
+<p> RedisLive工具</p>
+<p>参考资料</p>
+<p>《Redis设计和实现》</p>
+<p>《Redis开发和运维》</p>
+</div><div class="post-footer"><div class="meta"><div class="info"><i class="fa fa-sun-o"></i><span class="date">2021-12-03</span><i class="fa fa-tag"></i><a class="tag" href="/categories/Redis/" title="Redis">Redis </a><a class="tag" href="/tags/Redis/" title="Redis">Redis </a><span class="leancloud_visitors"></span></div></div></div></div><div class="share"><div class="evernote"><a class="fa fa-bookmark" href="" onclick="javascript:join_favorite()" ref="sidebar"></a></div><div class="weibo"><a class="fa fa-weibo" href="javascript:void((function(s,d,e){try{}catch(e){}var f='http://service.weibo.com/share/share.php?',u=d.location.href,p=['url=',e(u),'&amp;title=',e(d.title),'&amp;appkey=2924220432'].join('');function a(){if(!window.open([f,p].join(''),'mb',['toolbar=0,status=0,resizable=1,width=620,height=450,left=',(s.width-620)/2,',top=',(s.height-450)/2].join('')))u.href=[f,p].join('');};if(/Firefox/.test(navigator.userAgent)){setTimeout(a,0)}else{a()}})(screen,document,encodeURIComponent));"></a></div><div class="twitter"><a class="fa fa-twitter" target="_blank" rel="noopener" href="http://twitter.com/home?status=,http://example.com/2021/12/03/Redis系列一/,Candy,Redis系列一,;"></a></div></div><div class="pagination"><ul class="clearfix"><li class="next pagbuttons"><a class="btn" role="navigation" href="/2021/07/19/RabbitMq/" title="RabbitMq">下一篇</a></li></ul></div><script src="/js/visitors.js"></script></div></div></div></div><script src="/js/jquery-migrate-1.2.1.min.js"></script><script src="/js/jquery.appear.js"></script><script src="/js/add-bookmark.js"></script><script src="/js/baidu-tongji.js"></script><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"log":false,"pluginJsPath":"lib/","pluginModelPath":"assets/","pluginRootPath":"live2dw/","tagMode":false});</script></body></html>
